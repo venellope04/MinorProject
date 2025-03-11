@@ -1,0 +1,20 @@
+{% extends 'conferencing/base.html' %}
+{% load static %}
+
+{% block content %}
+<h2>Room: {{ room_name }}</h2>
+
+<div id="video_container" style="width: 800px; height: 600px; border: 1px solid #ccc;"></div>
+
+<div id="controls" style="text-align: center; padding: 10px;">
+    <button id="joinBtn">Join Room</button>
+    <button id="leaveBtn" disabled>Leave Room</button>
+</div>
+
+<script src="https://cdn.agora.io/sdk/release/AgoraRTC_N-4.8.0.js"></script>
+<script src="{% static 'conferencing/js/agora.js' %}"></script>
+
+<script>
+    const roomName = "{{ room_name }}";
+</script>
+{% endblock %}
