@@ -15,7 +15,7 @@ def video_call(request, room_name):
 # Agora Token Generation View
 def get_agora_token(request):
     app_id = '71fbf1e2263a49869725faa8404523ec'  # Replace with your Agora App ID
-    app_certificate = 'c30096eedb10445fb0990cb0d0a4f15b'  # Replace with your Agora App Certificate
+    app_certificate = 'c30096eedb10445fb0990cb0d0a4f15b'   # Replace with your Agora App Certificate
     channel_name = request.GET.get('channelName')
 
     if not channel_name:
