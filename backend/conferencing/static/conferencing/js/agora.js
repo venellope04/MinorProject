@@ -13,66 +13,87 @@ const stopLocalTracks = () => {
     localTracks = [];
 };
 
+// Function to fetch token from server
+const fetchToken = async (roomName) => {
+    const response = await fetch(`/get_token/?channelName=${roomName}`);
+    return await response.json();
+};
+
 // Join Room Logic
 joinBtn.onclick = async () => {
     try {
-        const response = await fetch(`/get_token/?channelName=${roomName}`);
-        const data = await response.json();
+        // Ensure roomName is defined
+        if (!window.roomName || window.roomName.trim() === "") {
+            alert("Room name is missing!");
+            return;
+        }
 
-        await client.join(APP_ID, roomName, data.token, data.uid);
+        const data = await fetchToken(window.roomName);
 
-        // Stop any existing local tracks before creating new ones
-        stopLocalTracks();
+        if (data.error) {
+            throw new Error(data.error);
+        }
 
-        // Create a container for the local video
+        const token = data.token;
+        const uid = data.uid; // Ensure uid is correctly received from the server
+
+        // Debugging: Log the token and uid
+        console.log("Token:", token);
+        console.log("UID:", uid);
+
+        // Initialize the Agora client
+        client.on('user-published', handleUserPublished);
+        client.on('user-unpublished', handleUserUnpublished);
+
+        await client.join(APP_ID, window.roomName, token, uid);
+
+        // Create and display local video
+        const localTrack = await AgoraRTC.createCameraVideoTrack();
+        localTracks.push(localTrack);
+
         const localPlayer = document.createElement("div");
-        localPlayer.id = `user-${data.uid}`;
+        localPlayer.id = `user-${uid}`;
         localPlayer.style.width = "400px";
         localPlayer.style.height = "300px";
         videoContainer.appendChild(localPlayer);
-
-        // Display Local Video
-        const localTrack = await AgoraRTC.createCameraVideoTrack();
-        localTracks.push(localTrack);
         localTrack.play(localPlayer);
+
+        // Publish the local track
+        await client.publish(localTracks);
 
         joinBtn.disabled = true;
         leaveBtn.disabled = false;
-
-        // Handle Remote Users
-        client.on("user-published", async (user, mediaType) => {
-            await client.subscribe(user, mediaType);
-            if (mediaType === "video") {
-                const remotePlayer = document.createElement("div");
-                remotePlayer.id = `user-${user.uid}`;
-                remotePlayer.style.width = "400px";
-                remotePlayer.style.height = "300px";
-                videoContainer.appendChild(remotePlayer);
-                user.videoTrack.play(remotePlayer);
-                remoteUsers[user.uid] = user;
-            }
-        });
-
-        client.on("user-unpublished", user => {
-            const remotePlayer = document.getElementById(`user-${user.uid}`);
-            if (remotePlayer) remotePlayer.remove();
-            delete remoteUsers[user.uid];
-        });
 
     } catch (err) {
         console.error("Failed to join room:", err);
     }
 };
 
+// Handle Remote Users
+const handleUserPublished = async (user, mediaType) => {
+    await client.subscribe(user, mediaType);
+    if (mediaType === "video") {
+        const remotePlayer = document.createElement("div");
+        remotePlayer.id = `user-${user.uid}`;
+        remotePlayer.style.width = "400px";
+        remotePlayer.style.height = "300px";
+        videoContainer.appendChild(remotePlayer);
+        user.videoTrack.play(remotePlayer);
+        remoteUsers[user.uid] = user;
+    }
+};
+
+const handleUserUnpublished = user => {
+    const remotePlayer = document.getElementById(`user-${user.uid}`);
+    if (remotePlayer) remotePlayer.remove();
+    delete remoteUsers[user.uid];
+};
+
 // Leave Room Logic
 leaveBtn.onclick = async () => {
     stopLocalTracks();
     await client.leave();
-    document.getElementById('video_container').innerHTML = '';
-    Object.values(remoteUsers).forEach(user => {
-        const remotePlayer = document.getElementById(`user-${user.uid}`);
-        if (remotePlayer) remotePlayer.remove();
-    });
+    videoContainer.innerHTML = '';
     remoteUsers = {};
 
     joinBtn.disabled = false;
