@@ -1,50 +1,36 @@
+import os
+import sys
+import cv2
+import numpy as np
 from channels.generic.websocket import AsyncWebsocketConsumer
-import json
 
-class VideoCallConsumer(AsyncWebsocketConsumer):
+# Add project root to sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+from ml_models.asl_detection.detect import detect_signs
+
+class SignDetectionConsumer(AsyncWebsocketConsumer):
     async def connect(self):
-        self.room_name = self.scope['url_route']['kwargs']['room_name']
-        self.room_group_name = f'video_call_{self.room_name}'
-
-        # Join room group
-        await self.channel_layer.group_add(
-            self.room_group_name,
-            self.channel_name
-        )
-
         await self.accept()
+        print("WebSocket connected for sign detection")
 
     async def disconnect(self, close_code):
-        # Leave room group
-        await self.channel_layer.group_discard(
-            self.room_group_name,
-            self.channel_name
-        )
+        print("WebSocket disconnected")
 
-    async def receive(self, text_data):
-        text_data_json = json.loads(text_data)
-        message = text_data_json.get('message', None)  # Get 'message' key safely
+    async def receive(self, text_data=None, bytes_data=None):
+        if bytes_data:
+            try:
+                # Decode the JPEG frame to OpenCV format
+                nparr = np.frombuffer(bytes_data, np.uint8)
+                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if frame is None:
+                    print("Failed to decode frame")
+                    await self.send(text_data="[None]")
+                    return
 
-        if message:
-            # Send message to room group
-            await self.channel_layer.group_send(
-                self.room_group_name,
-                {
-                    'type': 'chat_message',
-                    'message': message
-                }
-            )
-        else:
-            # Handle other types of messages (e.g., 'offer', 'answer', 'candidate')
-            await self.channel_layer.group_send(
-                self.room_group_name,
-                text_data_json
-            )
-
-    async def chat_message(self, event):
-        message = event['message']
-
-        # Send message to WebSocket
-        await self.send(text_data=json.dumps({
-            'message': message
-        }))
+                # Detect ASL sign
+                translation = detect_signs(frame)
+                # Send translation back to client
+                await self.send(text_data=translation)
+            except Exception as e:
+                print(f"Error processing frame: {e}")
+                await self.send(text_data="[Error]")

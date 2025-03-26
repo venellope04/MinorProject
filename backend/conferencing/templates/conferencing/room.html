@@ -2,229 +2,295 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Video Call Room</title>
-    <script src="https://cdn.agora.io/sdk/release/AgoraRTC_N-4.19.0.js?nocache=202503162"></script>
-    <style>
-        #video_container { display: flex; flex-wrap: wrap; gap: 10px; }
-        #video_container div { border: 1px solid #ccc; }
-        #controls { margin-top: 10px; }
-        button { margin-right: 5px; }
-    </style>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SignMeet - Video Call</title>
 </head>
 <body>
-    <h1>Video Call Room: {{ room_name }}</h1>
     <div id="video_container"></div>
     <div id="controls">
-        <button id="joinBtn">Join Room</button>
-        <button id="leaveBtn" disabled>Leave Room</button>
-        <button id="camBtn" disabled>Turn Off Cam</button>
-        <button id="micBtn" disabled>Turn Off Mic</button>
+        <button id="joinBtn">Join</button>
+        <button id="leaveBtn" disabled>Leave</button>
+        <button id="camBtn" disabled>Toggle Camera</button>
+        <button id="micBtn" disabled>Toggle Mic</button>
+        <button id="detectBtn" disabled>Detect Sign Language</button>
     </div>
+    <div id="subtitle">Translation: [None]</div>
 
+    <script src="https://cdn.agora.io/sdk/release/AgoraRTC_N-4.19.0.js?nocache=202503162"></script>
     <script>
-        const APP_ID = '71fbf1e2263a49869725faa8404523ec';
-        let client;
+        const APP_ID = "71fbf1e2263a49869725faa8404523ec"; // Your Agora App ID
+        const TOKEN = "{{ token }}";
+        const ROOM_NAME = "{{ room_name }}";
+        let client = null;
         let localTracks = { videoTrack: null, audioTrack: null };
+        let localVideoElement = null;
         let remoteUsers = {};
+        let isDetecting = false;
+        let ws = null;
+        let rafId = null;
+        const videoContainer = document.getElementById('video_container');
+        const subtitle = document.getElementById('subtitle');
+        const joinBtn = document.getElementById('joinBtn');
+        const leaveBtn = document.getElementById('leaveBtn');
+        const camBtn = document.getElementById('camBtn');
+        const micBtn = document.getElementById('micBtn');
+        const detectBtn = document.getElementById('detectBtn');
 
-        document.addEventListener('DOMContentLoaded', () => {
-            console.log("Agora SDK Version:", AgoraRTC.VERSION);
+        async function fetchToken(roomName) {
+            const response = await fetch(`/get_token/?channelName=${roomName}`);
+            return await response.json();
+        }
 
-            const joinBtn = document.getElementById('joinBtn');
-            const leaveBtn = document.getElementById('leaveBtn');
-            const camBtn = document.getElementById('camBtn');
-            const micBtn = document.getElementById('micBtn');
-            const videoContainer = document.getElementById('video_container');
-
-            const stopLocalTracks = () => {
-                if (localTracks.videoTrack) {
-                    localTracks.videoTrack.stop();
-                    localTracks.videoTrack = null;
+        joinBtn.onclick = async () => {
+            try {
+                const roomName = "{{ room_name }}";
+                if (!roomName || roomName.trim() === "") {
+                    alert("Room name is missing!");
+                    return;
                 }
-                if (localTracks.audioTrack) {
-                    localTracks.audioTrack.stop();
-                    localTracks.audioTrack = null;
-                }
-            };
 
-            const fetchToken = async (roomName) => {
-                const response = await fetch(`/get_token/?channelName=${roomName}`);
-                return await response.json();
-            };
+                const data = await fetchToken(roomName);
+                if (data.error) throw new Error(data.error);
 
-            const getStats = async () => {
+                const token = data.token;
+                const uid = data.uid;
+
+                client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+
+                client.on('user-published', handleUserPublished);
+                client.on('user-unpublished', handleUserUnpublished);
+
+                console.log("Joining channel...");
+                await client.join(APP_ID, roomName, token, uid);
+                console.log("Channel joined with UID:", uid);
+
+                console.log("Creating Agora video track...");
                 try {
-                    if (localTracks.videoTrack || localTracks.audioTrack) {
-                        const videoStats = localTracks.videoTrack ? client.getLocalVideoStats() : null;
-                        const audioStats = localTracks.audioTrack ? client.getLocalAudioStats() : null;
-                        console.log("Local Video Stats:", videoStats);
-                        console.log("Local Audio Stats:", audioStats);
-                    } else {
-                        console.log("No local tracks to get stats for.");
-                    }
-                } catch (error) {
-                    console.error("Error getting stats:", error);
-                }
-            };
-
-            joinBtn.onclick = async () => {
-                try {
-                    const roomName = "{{ room_name }}";
-                    if (!roomName || roomName.trim() === "") {
-                        alert("Room name is missing!");
-                        return;
-                    }
-
-                    const data = await fetchToken(roomName);
-                    if (data.error) throw new Error(data.error);
-
-                    const token = data.token;
-                    const uid = data.uid;
-
-                    client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
-
-                    client.on('user-published', handleUserPublished);
-                    client.on('user-unpublished', handleUserUnpublished);
-                    client.on('network-quality', (stats) => {
-                        console.log("Uplink quality:", stats.uplinkNetworkQuality);
-                        console.log("Downlink quality:", stats.downlinkNetworkQuality);
-                    });
-
-                    console.log("Joining channel...");
-                    await client.join(APP_ID, roomName, token, uid);
-                    console.log("Channel joined with UID:", uid);
-
-                    console.log("Creating Agora video track...");
-                    try {
-                        localTracks.videoTrack = await AgoraRTC.createCameraVideoTrack({
-                            encoderConfig: {
-                                width: 640,
-                                height: 480,
-                                frameRate: 15,
-                                bitrateMin: 300,
-                                bitrateMax: 500,
-                            }
-                        });
-                        console.log("Video track created:", localTracks.videoTrack);
-                        const videoStreamTrack = localTracks.videoTrack.getMediaStreamTrack();
-                        console.log("Video readyState:", videoStreamTrack.readyState);
-                        console.log("Video enabled:", videoStreamTrack.enabled);
-                        console.log("Video muted:", localTracks.videoTrack.muted);
-                        if (videoStreamTrack.readyState !== "live") {
-                            console.warn("Video track is not live. ReadyState:", videoStreamTrack.readyState);
-                            alert("Video track is not live.");
-                            localTracks.videoTrack = null;
+                    localTracks.videoTrack = await AgoraRTC.createCameraVideoTrack({
+                        encoderConfig: {
+                            width: 640,
+                            height: 480,
+                            frameRate: 15,
+                            bitrateMin: 300,
+                            bitrateMax: 500,
                         }
-                    } catch (trackError) {
-                        console.error("Failed to create video track:", trackError);
-                        alert("Camera access failed.");
+                    });
+                    console.log("Video track created:", localTracks.videoTrack);
+                    const videoStreamTrack = localTracks.videoTrack.getMediaStreamTrack();
+                    console.log("Video readyState:", videoStreamTrack.readyState);
+                    console.log("Video enabled:", videoStreamTrack.enabled);
+                    console.log("Video muted:", localTracks.videoTrack.muted);
+                    if (videoStreamTrack.readyState !== "live") {
+                        console.warn("Video track is not live. ReadyState:", videoStreamTrack.readyState);
+                        alert("Video track is not live.");
                         localTracks.videoTrack = null;
                     }
+                } catch (trackError) {
+                    console.error("Failed to create video track:", trackError);
+                    alert("Camera access failed: " + trackError.message);
+                    localTracks.videoTrack = null;
+                }
 
-                    console.log("Creating Agora audio track...");
-                    try {
-                        localTracks.audioTrack = await AgoraRTC.createMicrophoneAudioTrack();
-                        console.log("Audio track created:", localTracks.audioTrack);
-                        const audioStreamTrack = localTracks.audioTrack.getMediaStreamTrack();
-                        console.log("Audio readyState:", audioStreamTrack.readyState);
-                        console.log("Audio enabled:", audioStreamTrack.enabled);
-                        console.log("Audio muted:", localTracks.audioTrack.muted);
-                        if (audioStreamTrack.readyState !== "live") {
-                            console.warn("Audio track is not live. ReadyState:", audioStreamTrack.readyState);
-                            alert("Audio track is not live.");
-                            localTracks.audioTrack = null;
-                        }
-                    } catch (trackError) {
-                        console.error("Failed to create audio track:", trackError);
-                        alert("Microphone access failed.");
+                console.log("Creating Agora audio track...");
+                try {
+                    localTracks.audioTrack = await AgoraRTC.createMicrophoneAudioTrack();
+                    console.log("Audio track created:", localTracks.audioTrack);
+                    const audioStreamTrack = localTracks.audioTrack.getMediaStreamTrack();
+                    console.log("Audio readyState:", audioStreamTrack.readyState);
+                    console.log("Audio enabled:", audioStreamTrack.enabled);
+                    console.log("Audio muted:", localTracks.audioTrack.muted);
+                    if (audioStreamTrack.readyState !== "live") {
+                        console.warn("Audio track is not live. ReadyState:", audioStreamTrack.readyState);
+                        alert("Audio track is not live.");
                         localTracks.audioTrack = null;
                     }
+                } catch (trackError) {
+                    console.error("Failed to create audio track:", trackError);
+                    alert("Microphone access failed: " + trackError.message);
+                    localTracks.audioTrack = null;
+                }
 
-                    if (localTracks.videoTrack) {
-                        const localPlayer = document.createElement("div");
-                        localPlayer.id = `user-${uid}`;
-                        localPlayer.style.width = "400px";
-                        localPlayer.style.height = "300px";
-                        videoContainer.appendChild(localPlayer);
-                        console.log("Playing local video track...");
-                        localTracks.videoTrack.play(localPlayer);
-                        console.log("Local video track playing");
+                if (localTracks.videoTrack) {
+                    localVideoElement = document.createElement("video");
+                    localVideoElement.id = `user-video-${uid}`;
+                    localVideoElement.style.width = "400px";
+                    localVideoElement.style.height = "300px";
+                    localVideoElement.muted = true;
+                    localVideoElement.autoplay = true;
+                    videoContainer.appendChild(localVideoElement);
+
+                    const stream = new MediaStream();
+                    stream.addTrack(localTracks.videoTrack.getMediaStreamTrack());
+                    localVideoElement.srcObject = stream;
+                    console.log("Video stream attached to element:", localVideoElement);
+
+                    try {
+                        await localVideoElement.play();
+                        console.log("Video element playing, currentTime:", localVideoElement.currentTime);
+                        localTracks.videoTrack._videoElement = localVideoElement;
+                    } catch (playError) {
+                        console.error("Failed to play video element:", playError);
+                        alert("Failed to play video: " + playError.message);
+                        localTracks.videoTrack = null;
+                        localVideoElement = null;
                     }
+                }
 
-                    if (localTracks.videoTrack || localTracks.audioTrack) {
-                        console.log("Publishing tracks...");
-                        await client.publish([localTracks.videoTrack, localTracks.audioTrack].filter(Boolean));
-                        console.log("Tracks published successfully");
+                if (localTracks.videoTrack || localTracks.audioTrack) {
+                    console.log("Publishing tracks...");
+                    await client.publish([localTracks.videoTrack, localTracks.audioTrack].filter(Boolean));
+                    console.log("Tracks published successfully");
+                } else {
+                    console.log("No tracks to publish. Joined without media.");
+                }
+
+                joinBtn.disabled = true;
+                leaveBtn.disabled = false;
+                camBtn.disabled = !localTracks.videoTrack;
+                micBtn.disabled = !localTracks.audioTrack;
+                detectBtn.disabled = !localTracks.videoTrack;
+            } catch (err) {
+                console.error("Failed to join room:", err);
+                alert("Failed to join room: " + err.message);
+            }
+        };
+
+        leaveBtn.onclick = async () => {
+            for (let trackName in localTracks) {
+                if (localTracks[trackName]) {
+                    localTracks[trackName].stop();
+                    localTracks[trackName].close();
+                }
+            }
+            localTracks = { videoTrack: null, audioTrack: null };
+            localVideoElement = null;
+            await client.leave();
+            videoContainer.innerHTML = '';
+            joinBtn.disabled = false;
+            leaveBtn.disabled = true;
+            camBtn.disabled = true;
+            micBtn.disabled = true;
+            detectBtn.disabled = true;
+            console.log("Left channel");
+        };
+
+        camBtn.onclick = () => {
+            if (localTracks.videoTrack) {
+                localTracks.videoTrack.setEnabled(!localTracks.videoTrack.enabled);
+                camBtn.textContent = localTracks.videoTrack.enabled ? "Disable Camera" : "Enable Camera";
+                console.log("Camera toggled, enabled:", localTracks.videoTrack.enabled);
+            }
+        };
+
+        micBtn.onclick = () => {
+            if (localTracks.audioTrack) {
+                localTracks.audioTrack.setEnabled(!localTracks.audioTrack.enabled);
+                micBtn.textContent = localTracks.audioTrack.enabled ? "Disable Mic" : "Enable Mic";
+                console.log("Mic toggled, enabled:", localTracks.audioTrack.enabled);
+            }
+        };
+
+        detectBtn.onclick = async () => {
+            if (!localTracks.videoTrack) {
+                console.error("Video track is unavailable:", localTracks.videoTrack);
+                alert("No video track available for detection.");
+                return;
+            }
+
+            if (!localTracks.videoTrack._videoElement) {
+                console.error("Video element is unavailable:", {
+                    videoTrack: localTracks.videoTrack,
+                    videoElement: localTracks.videoTrack._videoElement
+                });
+                alert("Video feed is not rendering. Ensure the video track is playing.");
+                return;
+            }
+
+            if (isDetecting) {
+                // Stop detection
+                if (ws) ws.close();
+                if (rafId) cancelAnimationFrame(rafId);
+                isDetecting = false;
+                detectBtn.textContent = "Detect Sign Language";
+                subtitle.textContent = "Translation: [None]";
+                console.log("Stopped sign language detection");
+                return;
+            }
+
+            // Start detection
+            isDetecting = true;
+            detectBtn.textContent = "Stop Detection";
+
+            ws = new WebSocket('ws://' + window.location.host + '/ws/sign_detection/');
+            ws.onopen = () => {
+                console.log("WebSocket connected for sign detection");
+                // Wait briefly to ensure connection stability
+                setTimeout(() => sendFrame(), 500); // Delay 500ms
+            };
+            ws.onmessage = (event) => {
+                const translation = event.data;
+                subtitle.textContent = `Translation: ${translation || '[None]'}`;
+                console.log("Received translation:", translation);
+            };
+            ws.onclose = () => {
+                console.log("WebSocket closed, readyState:", ws.readyState);
+                isDetecting = false;
+                detectBtn.textContent = "Detect Sign Language";
+                subtitle.textContent = "Translation: [None]";
+                if (rafId) cancelAnimationFrame(rafId);
+            };
+            ws.onerror = (error) => console.error("WebSocket error:", error);
+
+            const videoElement = localTracks.videoTrack._videoElement;
+            const canvas = document.createElement('canvas');
+            canvas.width = videoElement.videoWidth;
+            canvas.height = videoElement.videoHeight;
+            const context = canvas.getContext('2d');
+
+            function sendFrame() {
+                if (!isDetecting || !ws || ws.readyState !== WebSocket.OPEN) {
+                    console.log("Stopping frame send due to detection or WebSocket state:", {
+                        isDetecting, wsReadyState: ws ? ws.readyState : "null"
+                    });
+                    return;
+                }
+
+                context.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+                canvas.toBlob((blob) => {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(blob);
+                        console.log("Frame sent, size:", blob.size, "at", new Date().toISOString());
                     } else {
-                        console.log("No tracks to publish. Joined without media.");
+                        console.warn("WebSocket not open, readyState:", ws.readyState);
                     }
+                }, 'image/jpeg', 0.7);
 
-                    getStats();
+                rafId = requestAnimationFrame(sendFrame);
+            }
+        };
 
-                    joinBtn.disabled = true;
-                    leaveBtn.disabled = false;
-                    camBtn.disabled = !localTracks.videoTrack;
-                    micBtn.disabled = !localTracks.audioTrack;
-                } catch (err) {
-                    console.error("Failed to join room:", err);
-                }
-            };
+        async function handleUserPublished(user, mediaType) {
+            console.log("User published:", user.uid, mediaType);
+            await client.subscribe(user, mediaType);
 
-            camBtn.onclick = () => {
-                if (!localTracks.videoTrack) return;
-                const isEnabled = localTracks.videoTrack.enabled;
-                localTracks.videoTrack.setEnabled(!isEnabled);
-                camBtn.textContent = isEnabled ? "Turn On Cam" : "Turn Off Cam";
-                console.log(`Camera ${isEnabled ? "disabled" : "enabled"}`);
-            };
+            if (mediaType === 'video') {
+                const player = document.createElement("div");
+                player.id = `remote-user-${user.uid}`;
+                player.style.width = "400px";
+                player.style.height = "300px";
+                videoContainer.appendChild(player);
+                user.videoTrack.play(player);
+            }
+            if (mediaType === 'audio') {
+                user.audioTrack.play();
+            }
+        }
 
-            micBtn.onclick = () => {
-                if (!localTracks.audioTrack) return;
-                const isEnabled = localTracks.audioTrack.enabled;
-                localTracks.audioTrack.setEnabled(!isEnabled);
-                micBtn.textContent = isEnabled ? "Turn On Mic" : "Turn Off Mic";
-                console.log(`Microphone ${isEnabled ? "disabled" : "enabled"}`);
-            };
-
-            const handleUserPublished = async (user, mediaType) => {
-                await client.subscribe(user, mediaType);
-                if (mediaType === "video") {
-                    const remotePlayer = document.createElement("div");
-                    remotePlayer.id = `user-${user.uid}`;
-                    remotePlayer.style.width = "400px";
-                    remotePlayer.style.height = "300px";
-                    videoContainer.appendChild(remotePlayer);
-                    user.videoTrack.play(remotePlayer);
-                    remoteUsers[user.uid] = user;
-                    console.log(`Subscribed to remote video for UID: ${user.uid}`);
-                }
-                if (mediaType === "audio") {
-                    user.audioTrack.play();
-                    console.log(`Subscribed to remote audio for UID: ${user.uid}`);
-                }
-            };
-
-            const handleUserUnpublished = user => {
-                const remotePlayer = document.getElementById(`user-${user.uid}`);
-                if (remotePlayer) remotePlayer.remove();
-                delete remoteUsers[user.uid];
-                console.log(`User unpublished, removed UID: ${user.uid}`);
-            };
-
-            leaveBtn.onclick = async () => {
-                stopLocalTracks();
-                await client.leave();
-                videoContainer.innerHTML = '';
-                remoteUsers = {};
-                joinBtn.disabled = false;
-                leaveBtn.disabled = true;
-                camBtn.disabled = true;
-                micBtn.disabled = true;
-                camBtn.textContent = "Turn Off Cam";
-                micBtn.textContent = "Turn Off Mic";
-                console.log("Left the channel");
-            };
-        });
+        function handleUserUnpublished(user) {
+            console.log("User unpublished:", user.uid);
+            const player = document.getElementById(`remote-user-${user.uid}`);
+            if (player) player.remove();
+        }
     </script>
 </body>
 </html>
